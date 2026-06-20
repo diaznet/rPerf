@@ -25,22 +25,4 @@ class CorrectionFactors extends HiveObject {
     this.slopeTakeoffPercentPerPercent = 0.0,
     this.slopeLandingPercentPerPercent = 0.0,
   });
-
-  Map<String, dynamic> toJson() => {
-        'headwindTakeoffPercentPerKt': headwindTakeoffPercentPerKt,
-        'tailwindTakeoffPercentPerKt': tailwindTakeoffPercentPerKt,
-        'headwindLandingPercentPerKt': headwindLandingPercentPerKt,
-        'tailwindLandingPercentPerKt': tailwindLandingPercentPerKt,
-        'slopeTakeoffPercentPerPercent': slopeTakeoffPercentPerPercent,
-        'slopeLandingPercentPerPercent': slopeLandingPercentPerPercent,
-      };
-
-  factory CorrectionFactors.fromJson(Map<String, dynamic> j) => CorrectionFactors(
-        headwindTakeoffPercentPerKt: (j['headwindTakeoffPercentPerKt'] ?? 0).toDouble(),
-        tailwindTakeoffPercentPerKt: (j['tailwindTakeoffPercentPerKt'] ?? 0).toDouble(),
-        headwindLandingPercentPerKt: (j['headwindLandingPercentPerKt'] ?? 0).toDouble(),
-        tailwindLandingPercentPerKt: (j['tailwindLandingPercentPerKt'] ?? 0).toDouble(),
-        slopeTakeoffPercentPerPercent: (j['slopeTakeoffPercentPerPercent'] ?? 0).toDouble(),
-        slopeLandingPercentPerPercent: (j['slopeLandingPercentPerPercent'] ?? 0).toDouble(),
-      );
 }

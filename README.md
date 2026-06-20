@@ -1,2 +1,4 @@
 # r-perf
-R-Perf - Calculate your landing and take-off performance
+R-Perf - Calculate your landing and take-off performance ✈️
+
+Work in progress.

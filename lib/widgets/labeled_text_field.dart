@@ -5,5 +5,8 @@ class LabeledTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   const LabeledTextField({super.key, required this.label, required this.controller, this.keyboardType});
   @override
-  Widget build(BuildContext context) => TextField(controller: controller, keyboardType: keyboardType, decoration: InputDecoration(labelText: label));
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: TextField(controller: controller, keyboardType: keyboardType, decoration: InputDecoration(labelText: label)),
+  );
 }

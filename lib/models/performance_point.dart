@@ -23,6 +23,20 @@ class PerformancePoint extends HiveObject {
   @HiveField(7)
   double landingOver50M;
 
+  // Optional per-point correction factors (override aircraft-level defaults)
+  @HiveField(8)
+  double? headwindTakeoffPercentPerKt;
+  @HiveField(9)
+  double? tailwindTakeoffPercentPerKt;
+  @HiveField(10)
+  double? headwindLandingPercentPerKt;
+  @HiveField(11)
+  double? tailwindLandingPercentPerKt;
+  @HiveField(12)
+  double? slopeTakeoffPercentPerPercent;
+  @HiveField(13)
+  double? slopeLandingPercentPerPercent;
+
   PerformancePoint({
     required this.runwayType,
     required this.weightKg,
@@ -32,27 +46,11 @@ class PerformancePoint extends HiveObject {
     required this.takeoffOver50M,
     required this.landingGroundRollM,
     required this.landingOver50M,
+    this.headwindTakeoffPercentPerKt,
+    this.tailwindTakeoffPercentPerKt,
+    this.headwindLandingPercentPerKt,
+    this.tailwindLandingPercentPerKt,
+    this.slopeTakeoffPercentPerPercent,
+    this.slopeLandingPercentPerPercent,
   });
-
-  Map<String, dynamic> toJson() => {
-        'runwayType': runwayType,
-        'weightKg': weightKg,
-        'pressureAltitudeFt': pressureAltitudeFt,
-        'deltaIsaC': deltaIsaC,
-        'takeoffGroundRollM': takeoffGroundRollM,
-        'takeoffOver50M': takeoffOver50M,
-        'landingGroundRollM': landingGroundRollM,
-        'landingOver50M': landingOver50M,
-      };
-
-  factory PerformancePoint.fromJson(Map<String, dynamic> j) => PerformancePoint(
-        runwayType: (j['runwayType'] ?? 'concrete').toString(),
-        weightKg: (j['weightKg'] ?? 0).toDouble(),
-        pressureAltitudeFt: (j['pressureAltitudeFt'] ?? 0).toDouble(),
-        deltaIsaC: (j['deltaIsaC'] ?? 0).toDouble(),
-        takeoffGroundRollM: (j['takeoffGroundRollM'] ?? 0).toDouble(),
-        takeoffOver50M: (j['takeoffOver50M'] ?? 0).toDouble(),
-        landingGroundRollM: (j['landingGroundRollM'] ?? 0).toDouble(),
-        landingOver50M: (j['landingOver50M'] ?? 0).toDouble(),
-      );
 }

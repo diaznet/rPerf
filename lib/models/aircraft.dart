@@ -32,29 +32,4 @@ class Aircraft extends HiveObject {
   }) : points = points ?? [];
 
   bool hasRunwayType(String type) => points.any((p) => p.runwayType == type);
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'registration': registration,
-    'name': name,
-    'mtowKg': mtowKg,
-    'grassPenaltyPercentIfNoGrassData': grassPenaltyPercentIfNoGrassData,
-    'correctionFactors': correctionFactors.toJson(),
-    'points': points.map((e) => e.toJson()).toList(),
-  };
-
-  factory Aircraft.fromJson(Map<String, dynamic> j) => Aircraft(
-    id: (j['id'] ?? '').toString(),
-    registration: (j['registration'] ?? '').toString(),
-    name: (j['name'] ?? '').toString(),
-    mtowKg: (j['mtowKg'] ?? 0).toDouble(),
-    grassPenaltyPercentIfNoGrassData:
-      j['grassPenaltyPercentIfNoGrassData'] == null ? null : (j['grassPenaltyPercentIfNoGrassData'] as num).toDouble(),
-    correctionFactors: j['correctionFactors'] == null
-      ? CorrectionFactors()
-      : CorrectionFactors.fromJson(Map<String, dynamic>.from(j['correctionFactors'])),
-    points: (j['points'] as List<dynamic>? ?? [])
-      .map((e) => PerformancePoint.fromJson(Map<String, dynamic>.from(e)))
-      .toList(),
-  );
 }

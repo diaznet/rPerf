@@ -21,7 +21,6 @@ class _AircraftEditPageState extends State<AircraftEditPage> {
   late TextEditingController mtowCtrl;
   late TextEditingController grassPenaltyCtrl;
 
-  // Correction factors
   late TextEditingController hwToCtrl;
   late TextEditingController twToCtrl;
   late TextEditingController hwLdCtrl;
@@ -48,10 +47,7 @@ class _AircraftEditPageState extends State<AircraftEditPage> {
 
   @override
   void dispose() {
-    regCtrl.dispose();
-    nameCtrl.dispose();
-    mtowCtrl.dispose();
-    grassPenaltyCtrl.dispose();
+    regCtrl.dispose(); nameCtrl.dispose(); mtowCtrl.dispose(); grassPenaltyCtrl.dispose();
     hwToCtrl.dispose(); twToCtrl.dispose(); hwLdCtrl.dispose(); twLdCtrl.dispose(); slopeToCtrl.dispose(); slopeLdCtrl.dispose();
     super.dispose();
   }
@@ -74,6 +70,25 @@ class _AircraftEditPageState extends State<AircraftEditPage> {
     await a.save();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+    }
+  }
+
+  Future<void> _delete() async {
+    final a = HiveService.aircraftBox().get(widget.aircraftId)!;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Aircraft'),
+        content: Text('Delete ${a.registration} — ${a.name} and all its performance data?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    ) ?? false;
+    if (confirm) {
+      await HiveService.deleteAircraft(widget.aircraftId);
+      if (mounted) Navigator.of(context).pop();
     }
   }
 
@@ -102,6 +117,7 @@ class _AircraftEditPageState extends State<AircraftEditPage> {
                 LabeledTextField(label: 'Grass Penalty % (if no grass data)', controller: grassPenaltyCtrl, keyboardType: TextInputType.number),
                 const SizedBox(height: 12),
                 const Text('Correction Factors (percent per unit)', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
                 Row(children: [
                   Expanded(child: LabeledTextField(label: 'Headwind TO %/kt', controller: hwToCtrl, keyboardType: TextInputType.number)),
                   const SizedBox(width: 8),
@@ -118,6 +134,26 @@ class _AircraftEditPageState extends State<AircraftEditPage> {
                   Expanded(child: LabeledTextField(label: 'Slope LDG %/%', controller: slopeLdCtrl, keyboardType: TextInputType.number)),
                 ]),
                 const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _save,
+                        icon: const Icon(Icons.save),
+                        label: const Text('Save Changes'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    OutlinedButton.icon(
+                      onPressed: _delete,
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      label: const Text('Delete', style: TextStyle(color: Colors.red)),
+                      style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.red)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                const Divider(),
                 Row(
                   children: [
                     const Text('Performance Points', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -172,12 +208,6 @@ class _AircraftEditPageState extends State<AircraftEditPage> {
                       );
                     },
                   ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: _save,
-                  icon: const Icon(Icons.save),
-                  label: const Text('Save Changes'),
-                ),
                 const SizedBox(height: 40),
               ],
             ),

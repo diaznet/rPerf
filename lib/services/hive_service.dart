@@ -2,6 +2,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import '../models/aircraft.dart';
 import '../models/performance_point.dart';
 import '../models/correction_factors.dart';
+import 'airport_service.dart';
 
 class HiveService {
   static const aircraftBoxName = 'aircraft_box';
@@ -12,6 +13,7 @@ class HiveService {
     if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(PerformancePointAdapter());
     if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(CorrectionFactorsAdapter());
     await Hive.openBox<Aircraft>(aircraftBoxName);
+    await AirportService.init();
   }
 
   static Box<Aircraft> aircraftBox() => Hive.box<Aircraft>(aircraftBoxName);

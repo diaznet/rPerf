@@ -10,6 +10,7 @@ class StepperField extends StatelessWidget {
   final TextInputType keyboardType;
   final VoidCallback? onChanged;
   final String? suffixText; // optional unit text in the field (e.g., kts, °C)
+  final Color? fillColor; // optional background tint
 
   const StepperField({
     super.key,
@@ -22,6 +23,7 @@ class StepperField extends StatelessWidget {
     this.keyboardType = TextInputType.number,
     this.onChanged,
     this.suffixText,
+    this.fillColor,
   });
 
   double _parse() {
@@ -47,6 +49,8 @@ class StepperField extends StatelessWidget {
       keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
+        filled: fillColor != null,
+        fillColor: fillColor,
         suffixIcon: SizedBox(
           width: 96,
           child: Row(

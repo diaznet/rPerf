@@ -5,13 +5,35 @@ class InterpolatedResult {
   final double toOver50;
   final double ldGround;
   final double ldOver50;
+  final bool isExtrapolated;
+
+  // Interpolated per-point correction factors (null = use aircraft defaults)
+  final double? headwindTakeoffPercentPerKt;
+  final double? tailwindTakeoffPercentPerKt;
+  final double? headwindLandingPercentPerKt;
+  final double? tailwindLandingPercentPerKt;
+  final double? slopeTakeoffPercentPerPercent;
+  final double? slopeLandingPercentPerPercent;
 
   InterpolatedResult({
     required this.toGround,
     required this.toOver50,
     required this.ldGround,
     required this.ldOver50,
+    this.isExtrapolated = false,
+    this.headwindTakeoffPercentPerKt,
+    this.tailwindTakeoffPercentPerKt,
+    this.headwindLandingPercentPerKt,
+    this.tailwindLandingPercentPerKt,
+    this.slopeTakeoffPercentPerPercent,
+    this.slopeLandingPercentPerPercent,
   });
+
+  static InterpolatedResult nan({bool isExtrapolated = false}) => InterpolatedResult(
+    toGround: double.nan, toOver50: double.nan,
+    ldGround: double.nan, ldOver50: double.nan,
+    isExtrapolated: isExtrapolated,
+  );
 }
 
 class Interpolator {
@@ -23,170 +45,227 @@ class Interpolator {
     double deltaIsaC,
   ) {
     final pts = points.where((p) => p.runwayType == runwayType).toList();
-    if (pts.isEmpty) {
-      // No data of that type
-      return InterpolatedResult(toGround: double.nan, toOver50: double.nan, ldGround: double.nan, ldOver50: double.nan);
-    }
+    if (pts.isEmpty) return InterpolatedResult.nan();
 
-    // Group by weight unique levels
     final weights = pts.map((e) => e.weightKg).toSet().toList()..sort();
-    double w0 = weights.first;
-    double w1 = weights.last;
 
-    // Find bracketing weights
-    for (int i = 0; i < weights.length; i++) {
-      if (weights[i] <= weightKg) w0 = weights[i];
-      if (weights[i] >= weightKg) {
-        w1 = weights[i];
-        break;
+    // Check if outside data envelope
+    final allAlts = pts.map((e) => e.pressureAltitudeFt).toSet().toList()..sort();
+    final allDeltas = pts.map((e) => e.deltaIsaC).toSet().toList()..sort();
+    final extrapolated = weightKg < weights.first || weightKg > weights.last ||
+        paFt < allAlts.first || paFt > allAlts.last ||
+        deltaIsaC < allDeltas.first || deltaIsaC > allDeltas.last;
+
+    // Separate weight grids for takeoff and landing (they may differ)
+    final toWeights = pts.where((p) => p.takeoffGroundRollM != 0 || p.takeoffOver50M != 0)
+        .map((e) => e.weightKg).toSet().toList()..sort();
+    final ldWeights = pts.where((p) => p.landingGroundRollM != 0 || p.landingOver50M != 0)
+        .map((e) => e.weightKg).toSet().toList()..sort();
+
+    // Interpolate takeoff on its weight grid
+    InterpolatedResult? toResult;
+    if (toWeights.isNotEmpty) {
+      final twb = _bracket(toWeights, weightKg);
+      final r0 = _bilinearAtWeight(pts, twb.lo, paFt, deltaIsaC);
+      final r1 = twb.lo == twb.hi ? r0 : _bilinearAtWeight(pts, twb.hi, paFt, deltaIsaC);
+      if (r0 != null || r1 != null) {
+        if (r0 == null) { toResult = r1; }
+        else if (r1 == null || twb.lo == twb.hi) { toResult = r0; }
+        else {
+          final t = (weightKg - twb.lo) / (twb.hi - twb.lo);
+          toResult = _lerpResults(r0, r1, t);
+        }
       }
     }
 
-    // Interpolate at w0 and w1 (bilinear), then linear across weight
-    final r0 = _bilinearAtWeight(pts, w0, paFt, deltaIsaC);
-    final r1 = _bilinearAtWeight(pts, w1, paFt, deltaIsaC);
-
-    if (w0 == w1) {
-      return r0;
-    } else {
-      final t = (weightKg - w0) / (w1 - w0);
-      return InterpolatedResult(
-        toGround: _lerp(r0.toGround, r1.toGround, t),
-        toOver50: _lerp(r0.toOver50, r1.toOver50, t),
-        ldGround: _lerp(r0.ldGround, r1.ldGround, t),
-        ldOver50: _lerp(r0.ldOver50, r1.ldOver50, t),
-      );
-    }
-  }
-
-  static InterpolatedResult _bilinearAtWeight(
-      List<PerformancePoint> pts, double weightKg, double paFt, double dIsa) {
-    final wPts = pts.where((p) => (p.weightKg - weightKg).abs() < 1e-6 || p.weightKg == weightKg).toList();
-    // If no exact weight matches, pick all with this weight (we will filter below)
-    final exactWeightPts = pts.where((p) => p.weightKg == weightKg).toList();
-    final List<PerformancePoint> pool = exactWeightPts.isNotEmpty ? exactWeightPts : pts.where((p) => (p.weightKg - weightKg).abs() < 1e-6 || p.weightKg == weightKg).toList();
-
-    // Build axes (alt and delta)
-    final alts = pool.map((e) => e.pressureAltitudeFt).toSet().toList()..sort();
-    final deltas = pool.map((e) => e.deltaIsaC).toSet().toList()..sort();
-
-    // If the pool is empty (no specific points at that weight), fallback to nearest weight set
-    final byWeight = pts.where((p) => p.weightKg == weightKg).toList();
-    final use = byWeight.isNotEmpty ? byWeight : pts;
-
-    // Find bracketing altitudes and deltas
-    double a0 = alts.isNotEmpty ? alts.first : paFt;
-    double a1 = alts.isNotEmpty ? alts.last : paFt;
-    for (final a in alts) {
-      if (a <= paFt) a0 = a;
-      if (a >= paFt) {
-        a1 = a;
-        break;
-      }
-    }
-    double d0 = deltas.isNotEmpty ? deltas.first : dIsa;
-    double d1 = deltas.isNotEmpty ? deltas.last : dIsa;
-    for (final d in deltas) {
-      if (d <= dIsa) d0 = d;
-      if (d >= dIsa) {
-        d1 = d;
-        break;
+    // Interpolate landing on its weight grid
+    InterpolatedResult? ldResult;
+    if (ldWeights.isNotEmpty) {
+      final lwb = _bracket(ldWeights, weightKg);
+      final r0 = _bilinearAtWeight(pts, lwb.lo, paFt, deltaIsaC);
+      final r1 = lwb.lo == lwb.hi ? r0 : _bilinearAtWeight(pts, lwb.hi, paFt, deltaIsaC);
+      if (r0 != null || r1 != null) {
+        if (r0 == null) { ldResult = r1; }
+        else if (r1 == null || lwb.lo == lwb.hi) { ldResult = r0; }
+        else {
+          final t = (weightKg - lwb.lo) / (lwb.hi - lwb.lo);
+          ldResult = _lerpResults(r0, r1, t);
+        }
       }
     }
 
-    PerformancePoint? p00 = _find(use, weightKg, a0, d0);
-    PerformancePoint? p10 = _find(use, weightKg, a1, d0);
-    PerformancePoint? p01 = _find(use, weightKg, a0, d1);
-    PerformancePoint? p11 = _find(use, weightKg, a1, d1);
+    if (toResult == null && ldResult == null) return InterpolatedResult.nan(isExtrapolated: extrapolated);
 
-    // If exact exists
-    final exact = _find(use, weightKg, paFt, dIsa);
-    if (exact != null) {
-      return InterpolatedResult(
-        toGround: exact.takeoffGroundRollM,
-        toOver50: exact.takeoffOver50M,
-        ldGround: exact.landingGroundRollM,
-        ldOver50: exact.landingOver50M,
-      );
-    }
-
-    // Fallbacks if corners missing
-    if (a0 == a1 && d0 == d1 && p00 != null) {
-      return InterpolatedResult(
-        toGround: p00.takeoffGroundRollM,
-        toOver50: p00.takeoffOver50M,
-        ldGround: p00.landingGroundRollM,
-        ldOver50: p00.landingOver50M,
-      );
-    }
-
-    if (a0 == a1) {
-      // Linear in delta
-      final q0 = p00 ?? _findNearest(use, weightKg, a0, d0);
-      final q1 = p01 ?? _findNearest(use, weightKg, a0, d1);
-      final t = (dIsa - d0) / ((d1 - d0).abs() < 1e-9 ? 1 : (d1 - d0));
-      return _lerpPoints(q0!, q1!, t);
-    }
-    if (d0 == d1) {
-      // Linear in altitude
-      final q0 = p00 ?? _findNearest(use, weightKg, a0, d0);
-      final q1 = p10 ?? _findNearest(use, weightKg, a1, d0);
-      final t = (paFt - a0) / ((a1 - a0).abs() < 1e-9 ? 1 : (a1 - a0));
-      return _lerpPoints(q0!, q1!, t);
-    }
-
-    // Bilinear:
-    // First interpolate along altitude for both delta rows, then along delta
-    final f_d0 = _lerpPoints(
-      p00 ?? _findNearest(use, weightKg, a0, d0)!,
-      p10 ?? _findNearest(use, weightKg, a1, d0)!,
-      (paFt - a0) / ((a1 - a0).abs() < 1e-9 ? 1 : (a1 - a0)),
-    );
-    final f_d1 = _lerpPoints(
-      p01 ?? _findNearest(use, weightKg, a0, d1)!,
-      p11 ?? _findNearest(use, weightKg, a1, d1)!,
-      (paFt - a0) / ((a1 - a0).abs() < 1e-9 ? 1 : (a1 - a0)),
-    );
-    final t2 = (dIsa - d0) / ((d1 - d0).abs() < 1e-9 ? 1 : (d1 - d0));
     return InterpolatedResult(
-      toGround: _lerp(f_d0.toGround, f_d1.toGround, t2),
-      toOver50: _lerp(f_d0.toOver50, f_d1.toOver50, t2),
-      ldGround: _lerp(f_d0.ldGround, f_d1.ldGround, t2),
-      ldOver50: _lerp(f_d0.ldOver50, f_d1.ldOver50, t2),
+      toGround: toResult?.toGround ?? 0,
+      toOver50: toResult?.toOver50 ?? 0,
+      ldGround: ldResult?.ldGround ?? toResult?.ldGround ?? 0,
+      ldOver50: ldResult?.ldOver50 ?? toResult?.ldOver50 ?? 0,
+      isExtrapolated: extrapolated,
+      headwindTakeoffPercentPerKt: toResult?.headwindTakeoffPercentPerKt,
+      tailwindTakeoffPercentPerKt: toResult?.tailwindTakeoffPercentPerKt,
+      headwindLandingPercentPerKt: ldResult?.headwindLandingPercentPerKt,
+      tailwindLandingPercentPerKt: ldResult?.tailwindLandingPercentPerKt,
+      slopeTakeoffPercentPerPercent: toResult?.slopeTakeoffPercentPerPercent,
+      slopeLandingPercentPerPercent: ldResult?.slopeLandingPercentPerPercent,
     );
   }
 
-static PerformancePoint? _find(List<PerformancePoint> list, double w, double a, double d) {
-  for (final p in list) {
-    if ((p.weightKg - w).abs() < 1e-6 &&
-        (p.pressureAltitudeFt - a).abs() < 1e-6 &&
-        (p.deltaIsaC - d).abs() < 1e-6) {
-      return p;
+  static InterpolatedResult? _bilinearAtWeight(
+      List<PerformancePoint> pts, double weightKg, double paFt, double dIsa) {
+    final pool = pts.where((p) => (p.weightKg - weightKg).abs() < 1e-6).toList();
+    if (pool.isEmpty) return null;
+
+    // Separate pools: takeoff data vs landing data
+    final toPool = pool.where((p) => p.takeoffGroundRollM != 0 || p.takeoffOver50M != 0).toList();
+    final ldPool = pool.where((p) => p.landingGroundRollM != 0 || p.landingOver50M != 0).toList();
+
+    // Interpolate takeoff using only points that have takeoff data
+    InterpolatedResult? toResult;
+    if (toPool.isNotEmpty) {
+      final toAlts = toPool.map((e) => e.pressureAltitudeFt).toSet().toList()..sort();
+      final toAb = _bracket(toAlts, paFt);
+      final toRLo = _interpDeltaAtAlt(toPool, weightKg, toAb.lo, dIsa);
+      final toRHi = toAb.lo == toAb.hi ? toRLo : _interpDeltaAtAlt(toPool, weightKg, toAb.hi, dIsa);
+      if (toRLo != null || toRHi != null) {
+        if (toRLo == null) { toResult = toRHi; }
+        else if (toRHi == null || toAb.lo == toAb.hi) { toResult = toRLo; }
+        else {
+          final t = (paFt - toAb.lo) / (toAb.hi - toAb.lo);
+          toResult = _lerpResults(toRLo, toRHi, t);
+        }
+      }
     }
+
+    // Interpolate landing using only points that have landing data
+    InterpolatedResult? ldResult;
+    if (ldPool.isNotEmpty) {
+      final ldAlts = ldPool.map((e) => e.pressureAltitudeFt).toSet().toList()..sort();
+      final ldAb = _bracket(ldAlts, paFt);
+      final ldRLo = _interpDeltaAtAlt(ldPool, weightKg, ldAb.lo, dIsa);
+      final ldRHi = ldAb.lo == ldAb.hi ? ldRLo : _interpDeltaAtAlt(ldPool, weightKg, ldAb.hi, dIsa);
+      if (ldRLo != null || ldRHi != null) {
+        if (ldRLo == null) { ldResult = ldRHi; }
+        else if (ldRHi == null || ldAb.lo == ldAb.hi) { ldResult = ldRLo; }
+        else {
+          final t = (paFt - ldAb.lo) / (ldAb.hi - ldAb.lo);
+          ldResult = _lerpResults(ldRLo, ldRHi, t);
+        }
+      }
+    }
+
+    if (toResult == null && ldResult == null) return null;
+
+    // Merge: use takeoff from toResult and landing from ldResult
+    return InterpolatedResult(
+      toGround: toResult?.toGround ?? 0,
+      toOver50: toResult?.toOver50 ?? 0,
+      ldGround: ldResult?.ldGround ?? 0,
+      ldOver50: ldResult?.ldOver50 ?? 0,
+      headwindTakeoffPercentPerKt: toResult?.headwindTakeoffPercentPerKt ?? ldResult?.headwindTakeoffPercentPerKt,
+      tailwindTakeoffPercentPerKt: toResult?.tailwindTakeoffPercentPerKt ?? ldResult?.tailwindTakeoffPercentPerKt,
+      headwindLandingPercentPerKt: ldResult?.headwindLandingPercentPerKt ?? toResult?.headwindLandingPercentPerKt,
+      tailwindLandingPercentPerKt: ldResult?.tailwindLandingPercentPerKt ?? toResult?.tailwindLandingPercentPerKt,
+      slopeTakeoffPercentPerPercent: toResult?.slopeTakeoffPercentPerPercent ?? ldResult?.slopeTakeoffPercentPerPercent,
+      slopeLandingPercentPerPercent: ldResult?.slopeLandingPercentPerPercent ?? toResult?.slopeLandingPercentPerPercent,
+    );
   }
-  return null;
-}
 
-static PerformancePoint? _findNearest(List<PerformancePoint> list, double w, double a, double d) {
-  if (list.isEmpty) return null;
-  final sorted = List<PerformancePoint>.from(list)
-    ..sort((p1, p2) {
-      final e1 = (p1.weightKg - w).abs() + (p1.pressureAltitudeFt - a).abs() + (p1.deltaIsaC - d).abs();
-      final e2 = (p2.weightKg - w).abs() + (p2.pressureAltitudeFt - a).abs() + (p2.deltaIsaC - d).abs();
-      return e1.compareTo(e2);
-    });
-  return sorted.first;
-}
+  static InterpolatedResult? _interpDeltaAtAlt(
+      List<PerformancePoint> pool, double w, double alt, double dIsa) {
+    final atAlt = pool.where((p) => (p.pressureAltitudeFt - alt).abs() < 1e-6).toList();
+    if (atAlt.isEmpty) return null;
 
+    final deltas = atAlt.map((e) => e.deltaIsaC).toSet().toList()..sort();
+    final db = _bracket(deltas, dIsa);
 
-  static InterpolatedResult _lerpPoints(PerformancePoint p0, PerformancePoint p1, double t) {
+    final pLo = _find(atAlt, w, alt, db.lo);
+    final pHi = _find(atAlt, w, alt, db.hi);
+
+    if (pLo == null && pHi == null) return null;
+    if (pLo == null) return _pointToResult(pHi!);
+    if (pHi == null || db.lo == db.hi) return _pointToResult(pLo);
+
+    final t = (dIsa - db.lo) / (db.hi - db.lo);
+    return _lerpPointResults(pLo, pHi, t);
+  }
+
+  static InterpolatedResult _pointToResult(PerformancePoint p) =>
+      InterpolatedResult(
+        toGround: p.takeoffGroundRollM, toOver50: p.takeoffOver50M,
+        ldGround: p.landingGroundRollM, ldOver50: p.landingOver50M,
+        headwindTakeoffPercentPerKt: p.headwindTakeoffPercentPerKt,
+        tailwindTakeoffPercentPerKt: p.tailwindTakeoffPercentPerKt,
+        headwindLandingPercentPerKt: p.headwindLandingPercentPerKt,
+        tailwindLandingPercentPerKt: p.tailwindLandingPercentPerKt,
+        slopeTakeoffPercentPerPercent: p.slopeTakeoffPercentPerPercent,
+        slopeLandingPercentPerPercent: p.slopeLandingPercentPerPercent,
+      );
+
+  static InterpolatedResult _lerpPointResults(PerformancePoint p0, PerformancePoint p1, double t) {
     return InterpolatedResult(
       toGround: _lerp(p0.takeoffGroundRollM, p1.takeoffGroundRollM, t),
       toOver50: _lerp(p0.takeoffOver50M, p1.takeoffOver50M, t),
       ldGround: _lerp(p0.landingGroundRollM, p1.landingGroundRollM, t),
       ldOver50: _lerp(p0.landingOver50M, p1.landingOver50M, t),
+      headwindTakeoffPercentPerKt: _lerpOpt(p0.headwindTakeoffPercentPerKt, p1.headwindTakeoffPercentPerKt, t),
+      tailwindTakeoffPercentPerKt: _lerpOpt(p0.tailwindTakeoffPercentPerKt, p1.tailwindTakeoffPercentPerKt, t),
+      headwindLandingPercentPerKt: _lerpOpt(p0.headwindLandingPercentPerKt, p1.headwindLandingPercentPerKt, t),
+      tailwindLandingPercentPerKt: _lerpOpt(p0.tailwindLandingPercentPerKt, p1.tailwindLandingPercentPerKt, t),
+      slopeTakeoffPercentPerPercent: _lerpOpt(p0.slopeTakeoffPercentPerPercent, p1.slopeTakeoffPercentPerPercent, t),
+      slopeLandingPercentPerPercent: _lerpOpt(p0.slopeLandingPercentPerPercent, p1.slopeLandingPercentPerPercent, t),
     );
   }
 
+  static InterpolatedResult _lerpResults(InterpolatedResult a, InterpolatedResult b, double t) {
+    return InterpolatedResult(
+      toGround: _lerp(a.toGround, b.toGround, t),
+      toOver50: _lerp(a.toOver50, b.toOver50, t),
+      ldGround: _lerp(a.ldGround, b.ldGround, t),
+      ldOver50: _lerp(a.ldOver50, b.ldOver50, t),
+      headwindTakeoffPercentPerKt: _lerpOpt(a.headwindTakeoffPercentPerKt, b.headwindTakeoffPercentPerKt, t),
+      tailwindTakeoffPercentPerKt: _lerpOpt(a.tailwindTakeoffPercentPerKt, b.tailwindTakeoffPercentPerKt, t),
+      headwindLandingPercentPerKt: _lerpOpt(a.headwindLandingPercentPerKt, b.headwindLandingPercentPerKt, t),
+      tailwindLandingPercentPerKt: _lerpOpt(a.tailwindLandingPercentPerKt, b.tailwindLandingPercentPerKt, t),
+      slopeTakeoffPercentPerPercent: _lerpOpt(a.slopeTakeoffPercentPerPercent, b.slopeTakeoffPercentPerPercent, t),
+      slopeLandingPercentPerPercent: _lerpOpt(a.slopeLandingPercentPerPercent, b.slopeLandingPercentPerPercent, t),
+    );
+  }
+
+  static PerformancePoint? _find(List<PerformancePoint> list, double w, double a, double d) {
+    for (final p in list) {
+      if ((p.weightKg - w).abs() < 1e-6 &&
+          (p.pressureAltitudeFt - a).abs() < 1e-6 &&
+          (p.deltaIsaC - d).abs() < 1e-6) {
+        return p;
+      }
+    }
+    return null;
+  }
+
+  static _Bracket _bracket(List<double> sorted, double value) {
+    double lo = sorted.first;
+    double hi = sorted.last;
+    for (final v in sorted) {
+      if (v <= value) lo = v;
+      if (v >= value) { hi = v; break; }
+    }
+    return _Bracket(lo, hi);
+  }
+
   static double _lerp(double a, double b, double t) => a + (b - a) * t.clamp(0.0, 1.0);
+
+  /// Lerp two optional values. Returns null if both are null; uses the non-null one if only one is set.
+  static double? _lerpOpt(double? a, double? b, double t) {
+    if (a == null && b == null) return null;
+    if (a == null) return b;
+    if (b == null) return a;
+    return _lerp(a, b, t);
+  }
+}
+
+class _Bracket {
+  final double lo;
+  final double hi;
+  const _Bracket(this.lo, this.hi);
 }

@@ -2,11 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 
 import '../models/aircraft.dart';
 import '../models/performance_point.dart';
@@ -14,112 +15,120 @@ import '../models/correction_factors.dart';
 import 'hive_service.dart';
 
 class ImportExportService {
-  // SHARE variants (existing behavior)
-  static Future<void> exportAllToJsonShare() async {
-    final content = _buildJsonContent();
-    final file = await _writeTempFile('aircraft_export.json', content);
-    await Share.shareXFiles([XFile(file.path)], text: 'AirPerf Aircraft Export (JSON)');
-  }
+  // ── Export (share) ──
 
-  static Future<void> exportAllToCsvShare() async {
+  static Future<void> exportAllShare() async {
     final content = _buildCsvContent();
     final file = await _writeTempFile('aircraft_export.csv', content);
-    await Share.shareXFiles([XFile(file.path)], text: 'AirPerf Aircraft Export (CSV)');
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'rPerf Aircraft Export'));
   }
 
-  // SAVE variants (new)
-  static Future<String?> exportAllToJsonSave() async {
-    final content = _buildJsonContent();
-    return _saveToUserLocation('aircraft_export.json', content, mimeType: 'application/json');
+  static Future<void> exportSingleShare(Aircraft a) async {
+    final content = _buildCsvContentForAircraft(a);
+    final file = await _writeTempFile('${a.registration}.csv', content);
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: '${a.registration} (CSV)'));
   }
 
-  static Future<String?> exportAllToCsvSave() async {
+  // ── Export (save to file) ──
+
+  static Future<String?> exportAllSave() async {
     final content = _buildCsvContent();
-    return _saveToUserLocation('aircraft_export.csv', content, mimeType: 'text/csv');
+    return _saveToUserLocation('aircraft_export.csv', content);
   }
 
-  // Helpers to build content
-  static String _buildJsonContent() {
-    final box = HiveService.aircraftBox();
-    final list = box.values.map((a) => a.toJson()).toList();
-    return const JsonEncoder.withIndent('  ').convert(list);
+  static Future<String?> exportSingleSave(Aircraft a) async {
+    final content = _buildCsvContentForAircraft(a);
+    return _saveToUserLocation('${a.registration}.csv', content);
   }
+
+  // ── Import ──
+
+  static Future<void> importFromFilePicker() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['csv'],
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final file = File(result.files.single.path!);
+    final text = await file.readAsString();
+    await _importCsvText(text);
+  }
+
+  // ── Sample aircraft ──
+
+  static const sampleAircraft = [
+    {'name': 'Evektor SportStar RTC', 'file': 'plane_samples/sample-evss.csv'},
+    {'name': 'Robin DR400 140b', 'file': 'plane_samples/sample-dr40.csv'},
+    {'name': 'Diamond DA-20', 'file': 'plane_samples/sample-da20.csv'},
+  ];
+
+  static Future<void> importSample(String assetPath) async {
+    final text = await rootBundle.loadString(assetPath);
+    await _importCsvText(text);
+  }
+
+  // ── CSV building ──
+
+  static List<String> _csvHeader() => [
+    'aircraftId', 'registration', 'name', 'mtowKg', 'grassPenaltyPercentIfNoGrassData',
+    'runwayType', 'weightKg', 'pressureAltitudeFt', 'temperatureC',
+    'takeoffGroundRollM', 'takeoffOver50M', 'landingGroundRollM', 'landingOver50M',
+    'headwindTO%/kt', 'tailwindTO%/kt', 'headwindLDG%/kt', 'tailwindLDG%/kt',
+    'slopeTO%/%', 'slopeLDG%/%',
+  ];
 
   static String _buildCsvContent() {
     final box = HiveService.aircraftBox();
-    final rows = <List<String>>[];
-    rows.add([
-      'aircraftId',
-      'registration',
-      'name',
-      'mtowKg',
-      'grassPenaltyPercentIfNoGrassData',
-      'runwayType',
-      'weightKg',
-      'pressureAltitudeFt',
-      'deltaIsaC',
-      'takeoffGroundRollM',
-      'takeoffOver50M',
-      'landingGroundRollM',
-      'landingOver50M',
-      'headwindTO%/kt',
-      'tailwindTO%/kt',
-      'headwindLDG%/kt',
-      'tailwindLDG%/kt',
-      'slopeTO%/%',
-      'slopeLDG%/%'
-    ]);
+    final rows = <List<String>>[_csvHeader()];
     for (final a in box.values) {
       if (a.points.isEmpty) {
-        rows.add([
-          a.id,
-          a.registration,
-          a.name,
-          a.mtowKg.toString(),
-          (a.grassPenaltyPercentIfNoGrassData ?? '').toString(),
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          '',
-          a.correctionFactors.headwindTakeoffPercentPerKt.toString(),
-          a.correctionFactors.tailwindTakeoffPercentPerKt.toString(),
-          a.correctionFactors.headwindLandingPercentPerKt.toString(),
-          a.correctionFactors.tailwindLandingPercentPerKt.toString(),
-          a.correctionFactors.slopeTakeoffPercentPerPercent.toString(),
-          a.correctionFactors.slopeLandingPercentPerPercent.toString(),
-        ]);
+        rows.add(_csvRowEmpty(a));
       } else {
         for (final p in a.points) {
-          rows.add([
-            a.id,
-            a.registration,
-            a.name,
-            a.mtowKg.toString(),
-            (a.grassPenaltyPercentIfNoGrassData ?? '').toString(),
-            p.runwayType,
-            p.weightKg.toString(),
-            p.pressureAltitudeFt.toString(),
-            p.deltaIsaC.toString(),
-            p.takeoffGroundRollM.toString(),
-            p.takeoffOver50M.toString(),
-            p.landingGroundRollM.toString(),
-            p.landingOver50M.toString(),
-            a.correctionFactors.headwindTakeoffPercentPerKt.toString(),
-            a.correctionFactors.tailwindTakeoffPercentPerKt.toString(),
-            a.correctionFactors.headwindLandingPercentPerKt.toString(),
-            a.correctionFactors.tailwindLandingPercentPerKt.toString(),
-            a.correctionFactors.slopeTakeoffPercentPerPercent.toString(),
-            a.correctionFactors.slopeLandingPercentPerPercent.toString(),
-          ]);
+          rows.add(_csvRowForPoint(a, p));
         }
       }
     }
-    final csv = rows.map((r) => r.map(_csvEscape).join(',')).join('\n');
-    return csv;
+    return rows.map((r) => r.map(_csvEscape).join(',')).join('\n');
+  }
+
+  static String _buildCsvContentForAircraft(Aircraft a) {
+    final rows = <List<String>>[_csvHeader()];
+    for (final p in a.points) {
+      rows.add(_csvRowForPoint(a, p));
+    }
+    return rows.map((r) => r.map(_csvEscape).join(',')).join('\n');
+  }
+
+  static List<String> _csvRowEmpty(Aircraft a) => [
+    a.id, a.registration, a.name, a.mtowKg.toString(),
+    (a.grassPenaltyPercentIfNoGrassData ?? '').toString(),
+    '', '', '', '', '', '', '', '',
+    a.correctionFactors.headwindTakeoffPercentPerKt.toString(),
+    a.correctionFactors.tailwindTakeoffPercentPerKt.toString(),
+    a.correctionFactors.headwindLandingPercentPerKt.toString(),
+    a.correctionFactors.tailwindLandingPercentPerKt.toString(),
+    a.correctionFactors.slopeTakeoffPercentPerPercent.toString(),
+    a.correctionFactors.slopeLandingPercentPerPercent.toString(),
+  ];
+
+  static List<String> _csvRowForPoint(Aircraft a, PerformancePoint p) {
+    final tempC = p.deltaIsaC + (15.0 - 1.9812 * p.pressureAltitudeFt / 1000);
+    return [
+      a.id, a.registration, a.name, a.mtowKg.toString(),
+      (a.grassPenaltyPercentIfNoGrassData ?? '').toString(),
+      p.runwayType, p.weightKg.toString(), p.pressureAltitudeFt.toString(),
+      tempC.toStringAsFixed(2),
+      p.takeoffGroundRollM.toString(), p.takeoffOver50M.toString(),
+      p.landingGroundRollM.toString(), p.landingOver50M.toString(),
+      (p.headwindTakeoffPercentPerKt ?? a.correctionFactors.headwindTakeoffPercentPerKt).toString(),
+      (p.tailwindTakeoffPercentPerKt ?? a.correctionFactors.tailwindTakeoffPercentPerKt).toString(),
+      (p.headwindLandingPercentPerKt ?? a.correctionFactors.headwindLandingPercentPerKt).toString(),
+      (p.tailwindLandingPercentPerKt ?? a.correctionFactors.tailwindLandingPercentPerKt).toString(),
+      (p.slopeTakeoffPercentPerPercent ?? a.correctionFactors.slopeTakeoffPercentPerPercent).toString(),
+      (p.slopeLandingPercentPerPercent ?? a.correctionFactors.slopeLandingPercentPerPercent).toString(),
+    ];
   }
 
   static String _csvEscape(String s) {
@@ -129,87 +138,15 @@ class ImportExportService {
     return s;
   }
 
-  static Future<File> _writeTempFile(String name, String content) async {
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$name');
-    await file.writeAsString(content);
-    return file;
-  }
-
-  // Save to user-selected location:
-  // - iOS: Files Save dialog (UIDocumentPicker)
-  // - Android: Storage Access Framework (Create Document)
-  // - Desktop: Downloads directory
-  static Future<String?> _saveToUserLocation(String filename, String content, {required String mimeType}) async {
-    // Web not supported
-    if (kIsWeb) return null;
-
-    final bytes = utf8.encode(content);
-
-    if (Platform.isAndroid || Platform.isIOS) {
-      // Create a temp file because FlutterFileDialog can save from sourceFilePath
-      final temp = await _writeTempFile(filename, content);
-      final params = SaveFileDialogParams(sourceFilePath: temp.path, fileName: filename);
-      try {
-        final savedPath = await FlutterFileDialog.saveFile(params: params);
-        return savedPath; // may be null if user cancels
-      } catch (e) {
-        // Fallback: try share if save dialog fails
-        final xf = XFile(temp.path, mimeType: mimeType);
-        await Share.shareXFiles([xf], text: 'AirPerf export: $filename');
-        return null;
-      }
-    } else {
-      // Desktop fallback: write to Downloads
-      final downloadsDir = await getDownloadsDirectory();
-      final dir = downloadsDir ?? await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/$filename');
-      await file.writeAsBytes(bytes, flush: true);
-      return file.path;
-    }
-  }
-
-  // Existing import flow unchanged
-  static Future<void> importFromFilePicker() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json', 'csv'],
-    );
-    if (result == null || result.files.isEmpty) return;
-
-    final file = File(result.files.single.path!);
-    final ext = file.path.split('.').last.toLowerCase();
-
-    if (ext == 'json') {
-      final text = await file.readAsString();
-      final List<dynamic> arr = jsonDecode(text);
-      for (final item in arr) {
-        final map = Map<String, dynamic>.from(item);
-        var ac = Aircraft.fromJson(map);
-        if (ac.id.isEmpty || HiveService.aircraftBox().containsKey(ac.id)) {
-          ac = Aircraft(
-            id: const Uuid().v4(),
-            registration: ac.registration,
-            name: ac.name,
-            mtowKg: ac.mtowKg,
-            correctionFactors: ac.correctionFactors,
-            grassPenaltyPercentIfNoGrassData: ac.grassPenaltyPercentIfNoGrassData,
-            points: ac.points,
-          );
-        }
-        await HiveService.addAircraft(ac);
-      }
-    } else if (ext == 'csv') {
-      final text = await file.readAsString();
-      await _importCsvText(text);
-    }
-  }
+  // ── CSV parsing ──
 
   static Future<void> _importCsvText(String csv) async {
     final lines = csv.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+    debugPrint('[Import] CSV: ${csv.length} chars, ${lines.length} lines');
     if (lines.isEmpty) return;
     final header = _parseCsvLine(lines.first);
     final col = {for (var i = 0; i < header.length; i++) header[i]: i};
+    debugPrint('[Import] Header columns: $col');
 
     final byAc = <String, List<List<String>>>{};
     for (int i = 1; i < lines.length; i++) {
@@ -242,18 +179,34 @@ class ImportExportService {
       for (final r in rows) {
         final rt = _getCell(r, col, 'runwayType') ?? '';
         if (rt.isEmpty) continue;
+        final pa = double.tryParse(_getCell(r, col, 'pressureAltitudeFt') ?? '') ?? 0.0;
+        final tempC = double.tryParse(_getCell(r, col, 'temperatureC') ?? '') ?? 15.0;
+        final dIsa = tempC - (15.0 - 1.9812 * pa / 1000);
+        final hwTo = double.tryParse(_getCell(r, col, 'headwindTO%/kt') ?? '');
+        final twTo = double.tryParse(_getCell(r, col, 'tailwindTO%/kt') ?? '');
+        final hwLd = double.tryParse(_getCell(r, col, 'headwindLDG%/kt') ?? '');
+        final twLd = double.tryParse(_getCell(r, col, 'tailwindLDG%/kt') ?? '');
+        final slTo = double.tryParse(_getCell(r, col, 'slopeTO%/%') ?? '');
+        final slLd = double.tryParse(_getCell(r, col, 'slopeLDG%/%') ?? '');
         pts.add(PerformancePoint(
           runwayType: rt,
           weightKg: double.tryParse(_getCell(r, col, 'weightKg') ?? '') ?? 0.0,
-          pressureAltitudeFt: double.tryParse(_getCell(r, col, 'pressureAltitudeFt') ?? '') ?? 0.0,
-          deltaIsaC: double.tryParse(_getCell(r, col, 'deltaIsaC') ?? '') ?? 0.0,
+          pressureAltitudeFt: pa,
+          deltaIsaC: dIsa,
           takeoffGroundRollM: double.tryParse(_getCell(r, col, 'takeoffGroundRollM') ?? '') ?? 0.0,
           takeoffOver50M: double.tryParse(_getCell(r, col, 'takeoffOver50M') ?? '') ?? 0.0,
           landingGroundRollM: double.tryParse(_getCell(r, col, 'landingGroundRollM') ?? '') ?? 0.0,
           landingOver50M: double.tryParse(_getCell(r, col, 'landingOver50M') ?? '') ?? 0.0,
+          headwindTakeoffPercentPerKt: hwTo,
+          tailwindTakeoffPercentPerKt: twTo,
+          headwindLandingPercentPerKt: hwLd,
+          tailwindLandingPercentPerKt: twLd,
+          slopeTakeoffPercentPerPercent: slTo,
+          slopeLandingPercentPerPercent: slLd,
         ));
       }
 
+      debugPrint('[Import] Aircraft "$reg" ($name): ${pts.length} points, mtow=$mtow');
       final ac = Aircraft(
         id: id,
         registration: reg,
@@ -303,5 +256,37 @@ class ImportExportService {
     }
     res.add(sb.toString());
     return res;
+  }
+
+  // ── File helpers ──
+
+  static Future<File> _writeTempFile(String name, String content) async {
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$name');
+    await file.writeAsString(content);
+    return file;
+  }
+
+  static Future<String?> _saveToUserLocation(String filename, String content) async {
+    if (kIsWeb) return null;
+    final bytes = utf8.encode(content);
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      final temp = await _writeTempFile(filename, content);
+      final params = SaveFileDialogParams(sourceFilePath: temp.path, fileName: filename);
+      try {
+        return await FlutterFileDialog.saveFile(params: params);
+      } catch (e) {
+        final xf = XFile(temp.path, mimeType: 'text/csv');
+        await SharePlus.instance.share(ShareParams(files: [xf], text: 'rPerf export: $filename'));
+        return null;
+      }
+    } else {
+      final downloadsDir = await getDownloadsDirectory();
+      final dir = downloadsDir ?? await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$filename');
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    }
   }
 }
